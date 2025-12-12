@@ -51,6 +51,8 @@ library
   exposed-modules:
     Tails.App.Server
     Tails.Bytes
+    Tails.TLS.Record.Codec
+    Tails.TLS.Record.Types
 
   -- Modules included in this library but not exported.
   other-modules:
@@ -97,6 +99,7 @@ test-suite tails-test
   -- Modules included in this executable, other than Main.
   other-modules:
     BytesSpec
+    RecordSpec
 
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
