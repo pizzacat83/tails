@@ -1,3 +1,7 @@
 {
     "editor.formatOnSave": true
+    ,
+    "[haskell]": {
+        "editor.tabSize": 2,
+    }
 }
