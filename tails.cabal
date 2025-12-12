@@ -48,7 +48,10 @@ library
   -- Import common warning flags.
   import: warnings
   -- Modules exported by the library.
-  exposed-modules: Tails.App.Server
+  exposed-modules:
+    Tails.App.Server
+    Tails.Bytes
+
   -- Modules included in this library but not exported.
   other-modules:
     Tails.Error
@@ -92,7 +95,9 @@ test-suite tails-test
   -- Base language which the package is written in.
   default-language: Haskell2010
   -- Modules included in this executable, other than Main.
-  -- other-modules:
+  other-modules:
+    BytesSpec
+
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
   -- The interface type and version of the test suite.
@@ -104,6 +109,7 @@ test-suite tails-test
   -- Test dependencies.
   build-depends:
     base >=4.18 && <5,
+    bytestring,
     tails,
     tasty,
     tasty-hunit,
