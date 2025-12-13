@@ -6,8 +6,8 @@ import Network.Socket (Socket)
 import Numeric (showHex)
 import Tails.TCP (acceptLoop, recvSome, sendAll, withServer)
 import Tails.TLS.Codec (DecodeError (..))
-import Tails.TLS.Handshake.Codec (decodeHandshake)
-import Tails.TLS.Handshake.Types (Handshake (..))
+import Tails.TLS.Handshake.Codec (decodeClientHello, decodeHandshake)
+import Tails.TLS.Handshake.Types (ClientHello (ClientHello), Handshake (..), HandshakeType (ClientHelloType), Random (Random))
 import Tails.TLS.Record.Codec (decodeTLSPlainText)
 import Tails.TLS.Record.Types (ContentType (Handshake), TLSPlainText (..))
 
@@ -40,15 +40,25 @@ handleConnEcho sock = do
               ++ " length="
               ++ show (BS.length (fragment record))
 
-          -- TODO: move this case to TLS/ ?
           case contentType record of
             Tails.TLS.Record.Types.Handshake -> do
               case decodeHandshake (fragment record) of
+                -- TODO: Handshake can consist of multiple messages. Need to handle NeedMoreData properly.
                 Left err -> putStrLn $ "failed to decode handshake: " ++ show err
                 Right (handshake, r) ->
                   if not $ BS.null r
                     then putStrLn $ "handshake decoded, but has trailing data: " ++ show (BS.length r)
-                    else putStrLn $ "handshake decoded successfully: type=" ++ show (msgType handshake)
+                    else do
+                      putStrLn $ "handshake decoded successfully: type=" ++ show (msgType handshake)
+                      case msgType handshake of
+                        ClientHelloType -> do
+                          putStrLn
+                            "ClientHello received"
+                          case decodeClientHello (msg handshake) of
+                            Right (ch, _) -> putStrLn $ "ClientHello random: " ++ concatMap (`showHex` "") (BS.unpack $ let (ClientHello (Random r) _ _) = ch in r)
+                            Left e -> putStrLn $ "Failed to decode ClientHello: " ++ show e
+                        _ ->
+                          putStrLn "Other handshake message received"
               pure ()
             _ -> pure ()
           loop' rest

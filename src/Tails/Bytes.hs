@@ -6,6 +6,8 @@ module Tails.Bytes
     getU16,
     getU24,
     getBytes,
+    getOpaque24,
+    getOpaqueVector,
     DecodeError (..),
     Put,
     runPut,
@@ -56,6 +58,28 @@ getBytes n =
      in if BS.length prefix < n
           then Left $ DecodeError ()
           else Right (prefix, rest)
+
+getOpaque24 :: Get ByteString
+getOpaque24 = do
+  len <- getU24
+  getBytes (fromIntegral len)
+
+-- https://datatracker.ietf.org/doc/html/rfc8446#section-3.4
+getOpaqueVector :: Int -> Int -> Get ByteString
+getOpaqueVector fl cl = do
+  len <-
+    if cl < 0x100
+      then fromIntegral <$> getU8
+      else
+        if cl < 0x10000
+          then fromIntegral <$> getU16
+          else
+            if cl < 0x1000000
+              then fromIntegral <$> getU24
+              else error "getOpaqueVector: ceiling too large"
+  if len < fl || len > cl
+    then undefined -- this is not "need more data". It's a malformed error!
+    else getBytes (fromIntegral len)
 
 instance Functor Get where
   fmap f (Get g) = Get $ \bs -> case g bs of
