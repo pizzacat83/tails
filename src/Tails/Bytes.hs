@@ -13,10 +13,15 @@ module Tails.Bytes
     runPut,
     putU8,
     putU16,
+    putU24,
     putBytes,
+    putOpaque24,
+    putOpaqueVector,
+    putVector,
   )
 where
 
+import Control.Monad (when)
 import Data.Bits (Bits (shiftR, (.&.), (.|.)), shiftL)
 import Data.ByteString (ByteString, toStrict)
 import qualified Data.ByteString as BS
@@ -117,8 +122,44 @@ putU16 w = do
   putU8 $ fromIntegral (w `shiftR` 8)
   putU8 $ fromIntegral (w .&. 0x00FF)
 
+putU24 :: Word -> Put ()
+putU24 w = do
+  putU8 $ fromIntegral (w `shiftR` 16)
+  putU8 $ fromIntegral ((w `shiftR` 8) .&. 0x00FF)
+  putU8 $ fromIntegral (w .&. 0x0000FF)
+
 putBytes :: ByteString -> Put ()
 putBytes bs = Put ((), Builder.byteString bs)
+
+putOpaque24 :: ByteString -> Put ()
+putOpaque24 bs = do
+  putU24 (fromIntegral $ BS.length bs)
+  putBytes bs
+
+putOpaqueVector :: Int -> Int -> ByteString -> Put ()
+putOpaqueVector fl cl bs = do
+  let len = BS.length bs
+  when (len < fl || len > cl) undefined -- this is an error on the sender side. what should we return in this case?
+
+  -- TODO: clearer implementation?
+  if cl < 0x100
+    then putU8 (fromIntegral len)
+    else
+      if cl < 0x10000
+        then putU16 (fromIntegral len)
+        else
+          if cl < 0x1000000
+            then putU24 (fromIntegral len)
+            else error "putOpaqueVector: ceiling too large"
+
+  putBytes bs
+
+putVector :: Int -> Int -> (a -> Put ()) -> [a] -> Put ()
+putVector fl cl putElem elems = do
+  -- calling runPut seems a bit awkward but can't find a better way. How does popular libraries do this?
+  let payload = runPut $ do
+        mapM_ putElem elems
+  putOpaqueVector fl cl payload
 
 instance Functor Put where
   fmap f (Put (a, b)) = Put (f a, b)

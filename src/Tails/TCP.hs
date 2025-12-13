@@ -33,6 +33,7 @@ acceptLoop serverSock handler = go
     go = do
       (connSock, _peer) <- accept serverSock
       handler connSock `finally` close connSock
+      go
 
 recvSome :: Socket -> Int -> IO ByteString
 recvSome = NSB.recv

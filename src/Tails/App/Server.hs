@@ -7,9 +7,9 @@ import Network.Socket (Socket)
 import Numeric (showHex)
 import Tails.TCP (acceptLoop, recvSome, sendAll, withServer)
 import Tails.TLS.Codec (DecodeError (..))
-import Tails.TLS.Handshake.Codec (decodeClientHello, decodeHandshake)
-import Tails.TLS.Handshake.Types (ClientHello (ClientHello), Handshake (..), HandshakeType (ClientHelloType), Random (Random))
-import Tails.TLS.Record.Codec (decodeTLSPlainText)
+import Tails.TLS.Handshake.Codec (decodeClientHello, decodeHandshake, encodeHandshake, encodeKeyShareServerHelloExtension, encodeServerHello, encodeServerSupportedVersionExtension)
+import Tails.TLS.Handshake.Types (CipherSuite (..), ClientHello (ClientHello, legacySessionId), Extension (Extension), ExtensionType (KeyShareType, SupportedVersionsType), Handshake (..), HandshakeType (ClientHelloType, ServerHelloType), KeyShareEntry (..), KeyShareServerHello (..), NamedGroup (..), ProtocolVersion (..), Random (Random), ServerHello (..), ServerSupportedVersion (..))
+import Tails.TLS.Record.Codec (decodeTLSPlainText, encodeTLSPlainText)
 import Tails.TLS.Record.Types (ContentType (Handshake), TLSPlainText (..))
 
 runServer :: IO ()
@@ -57,7 +57,39 @@ handleConnEcho sock = do
 
           putStrLn "ClientHello received"
           (clientHello, rest) <- either (ioError . userError . \err -> "failed to decode ClientHello" ++ show err) pure $ decodeClientHello (msg handshake)
-          putStrLn $ "ClientHello random: " ++ concatMap (`showHex` "") (BS.unpack $ let (ClientHello (Random r) _ _) = clientHello in r)
+
+          putStrLn "Sending ServerHello in response"
+          sendAll sock $
+            encodeTLSPlainText $
+              TLSPlainText
+                { contentType = Tails.TLS.Record.Types.Handshake,
+                  fragment =
+                    encodeHandshake $
+                      Tails.TLS.Handshake.Types.Handshake
+                        { msgType = ServerHelloType,
+                          msg =
+                            encodeServerHello $
+                              ServerHello
+                                { randomSH = Random (BS.replicate 32 0x83), -- TODO: use real randomness
+                                  legacySessionIdEcho = legacySessionId clientHello,
+                                  cipherSuiteSH = TLS_AES_256_GCM_SHA384,
+                                  extensionsSH =
+                                    -- it would be nice if we have a type safe way so that the correct pair of type and encoder is used
+                                    [ Extension SupportedVersionsType $ encodeServerSupportedVersionExtension $ ServerSupportedVersion TLS1_3,
+                                      Extension KeyShareType $
+                                        encodeKeyShareServerHelloExtension $
+                                          KeyShareServerHello $
+                                            KeyShareEntry
+                                              { group = X25519,
+                                                keyExchange = BS.replicate 32 0x84 -- TODO: use real key exchange data
+                                              }
+                                    ]
+                                }
+                        }
+                }
+
+          -- it would be nice if we can print the sent and received data without WireShark, but how can we design that, considering that a meaningful data (e.g. Handshake) can split across multiple chunks of the envelope?
+
           loop' rest
         Left NeedMoreData -> loop buf
         Left (Malformed err) -> do
