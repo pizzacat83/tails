@@ -51,6 +51,9 @@ library
   exposed-modules:
     Tails.App.Server
     Tails.Bytes
+    Tails.TLS.Codec
+    Tails.TLS.Handshake.Codec
+    Tails.TLS.Handshake.Types
     Tails.TLS.Record.Codec
     Tails.TLS.Record.Types
 

@@ -4,6 +4,7 @@ module Tails.Bytes
   ( Get (..),
     getU8,
     getU16,
+    getU24,
     getBytes,
     DecodeError (..),
     Put,
@@ -40,6 +41,13 @@ getU16 = do
   b1 <- getU8
   b2 <- getU8
   pure $ (fromIntegral b1 `shiftL` 8) .|. fromIntegral b2
+
+getU24 :: Get Word
+getU24 = do
+  b1 <- getU8
+  b2 <- getU8
+  b3 <- getU8
+  pure $ (fromIntegral b1 `shiftL` 16) .|. (fromIntegral b2 `shiftL` 8) .|. fromIntegral b3
 
 getBytes :: Int -> Get ByteString
 getBytes n =

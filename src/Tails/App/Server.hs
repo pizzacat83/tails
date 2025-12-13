@@ -5,8 +5,11 @@ import qualified Data.ByteString.Char8 as B8
 import Network.Socket (Socket)
 import Numeric (showHex)
 import Tails.TCP (acceptLoop, recvSome, sendAll, withServer)
-import Tails.TLS.Record.Codec (DecodeError (..), decodeTLSPlainText)
-import Tails.TLS.Record.Types (TLSPlainText (..))
+import Tails.TLS.Codec (DecodeError (..))
+import Tails.TLS.Handshake.Codec (decodeHandshake)
+import Tails.TLS.Handshake.Types (Handshake (..))
+import Tails.TLS.Record.Codec (decodeTLSPlainText)
+import Tails.TLS.Record.Types (ContentType (Handshake), TLSPlainText (..))
 
 runServer :: IO ()
 runServer =
@@ -36,11 +39,18 @@ handleConnEcho sock = do
               ++ show (contentType record)
               ++ " length="
               ++ show (BS.length (fragment record))
-              ++ " data="
-              -- show first 16 bytes in hex
-              ++ concatMap (`showHex` "") (BS.unpack $ BS.take 16 (fragment record))
-              ++ if BS.length (fragment record) > 16 then "..." else ""
 
+          -- TODO: move this case to TLS/ ?
+          case contentType record of
+            Tails.TLS.Record.Types.Handshake -> do
+              case decodeHandshake (fragment record) of
+                Left err -> putStrLn $ "failed to decode handshake: " ++ show err
+                Right (handshake, r) ->
+                  if not $ BS.null r
+                    then putStrLn $ "handshake decoded, but has trailing data: " ++ show (BS.length r)
+                    else putStrLn $ "handshake decoded successfully: type=" ++ show (msgType handshake)
+              pure ()
+            _ -> pure ()
           loop' rest
         Left NeedMoreData -> loop buf
         Left (Malformed err) -> do
