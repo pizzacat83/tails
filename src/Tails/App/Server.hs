@@ -1,5 +1,6 @@
 module Tails.App.Server (runServer, handleConnEcho) where
 
+import Control.Monad (unless)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as B8
 import Network.Socket (Socket)
@@ -40,29 +41,24 @@ handleConnEcho sock = do
               ++ " length="
               ++ show (BS.length (fragment record))
 
-          case contentType record of
-            Tails.TLS.Record.Types.Handshake -> do
-              case decodeHandshake (fragment record) of
-                -- TODO: Handshake can consist of multiple messages. Need to handle NeedMoreData properly.
-                Left err -> putStrLn $ "failed to decode handshake: " ++ show err
-                Right (handshake, r) ->
-                  if not $ BS.null r
-                    then putStrLn $ "handshake decoded, but has trailing data: " ++ show (BS.length r)
-                    else do
-                      putStrLn $ "handshake decoded successfully: type=" ++ show (msgType handshake)
-                      case msgType handshake of
-                        ClientHelloType -> do
-                          putStrLn
-                            "ClientHello received"
-                          case decodeClientHello (msg handshake) of
-                            Right (ch, _) -> putStrLn $ "ClientHello random: " ++ concatMap (`showHex` "") (BS.unpack $ let (ClientHello (Random r) _ _) = ch in r)
-                            Left e -> putStrLn $ "Failed to decode ClientHello: " ++ show e
-                        _ ->
-                          putStrLn "Other handshake message received"
-              pure ()
-            _ -> pure ()
+          unless (contentType record == Tails.TLS.Record.Types.Handshake) $
+            ioError $
+              userError $
+                "handshake record expected but got" ++ show (contentType record)
+
+          (handshake, rest) <- either (ioError . userError . \err -> "failed to decode handshake" ++ show err) pure $ decodeHandshake (fragment record)
+          unless (BS.null rest) $ ioError $ userError $ "handshake decoded, but has trailing data: " ++ show (BS.length rest)
+          putStrLn $ "handshake decoded successfully: type=" ++ show (msgType handshake)
+
+          unless (msgType handshake == ClientHelloType) $
+            ioError $
+              userError
+                "not a ClientHello message"
+
+          putStrLn "ClientHello received"
+          (clientHello, rest) <- either (ioError . userError . \err -> "failed to decode ClientHello" ++ show err) pure $ decodeClientHello (msg handshake)
+          putStrLn $ "ClientHello random: " ++ concatMap (`showHex` "") (BS.unpack $ let (ClientHello (Random r) _ _) = clientHello in r)
           loop' rest
         Left NeedMoreData -> loop buf
         Left (Malformed err) -> do
-          putStrLn $ "malformed TLS record: " ++ show err
-          pure ()
+          ioError $ userError $ "malformed TLS record: " ++ show err
