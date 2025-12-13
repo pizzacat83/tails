@@ -21,7 +21,7 @@ test_getU8 :: IO ()
 test_getU8 = do
   let input = BS.pack [0x42, 0x43, 0x44]
   case runGet getU8 input of
-    Left (DecodeError err) -> assertFailure $ "runGet failed: " ++ err
+    Left (DecodeError err) -> assertFailure $ "runGet failed: " ++ show err
     Right (val, rest) -> do
       val @?= 0x42
       rest @?= BS.pack [0x43, 0x44]
@@ -31,7 +31,7 @@ test_getU16 :: IO ()
 test_getU16 = do
   let input = BS.pack [0x01, 0x02, 0x03]
   case runGet getU16 input of
-    Left (DecodeError err) -> assertFailure $ "runGet failed: " ++ err
+    Left (DecodeError err) -> assertFailure $ "runGet failed: " ++ show err
     Right (val, rest) -> do
       val @?= 0x0102
       rest @?= BS.pack [0x03]
@@ -49,7 +49,7 @@ test_roundtrip_U8 = do
   let original = 0x42
   let encoded = runPut (putU8 original)
   case runGet getU8 encoded of
-    Left (DecodeError err) -> assertFailure $ "runGet failed: " ++ err
+    Left (DecodeError err) -> assertFailure $ "runGet failed: " ++ show err
     Right (decoded, _) -> decoded @?= original
 
 test_roundtrip_U16 :: IO ()
@@ -57,5 +57,5 @@ test_roundtrip_U16 = do
   let original = 0x0102
   let encoded = runPut (putU16 original)
   case runGet getU16 encoded of
-    Left (DecodeError err) -> assertFailure $ "runGet failed: " ++ err
+    Left (DecodeError err) -> assertFailure $ "runGet failed: " ++ show err
     Right (decoded, _) -> decoded @?= original

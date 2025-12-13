@@ -22,7 +22,7 @@ import qualified Data.ByteString.Builder as Builder
 import Data.Word (Word8)
 import GHC.Word (Word16)
 
-newtype DecodeError = DecodeError String deriving (Show)
+newtype DecodeError = DecodeError () deriving (Show)
 
 newtype Get a = Get {runGet :: ByteString -> Either DecodeError (a, ByteString)}
 
@@ -32,7 +32,7 @@ newtype Get a = Get {runGet :: ByteString -> Either DecodeError (a, ByteString)}
 getU8 :: Get Word8
 getU8 = Get $ \bs ->
   case BS.uncons bs of
-    Nothing -> Left $ DecodeError "getU8: no more input"
+    Nothing -> Left $ DecodeError ()
     Just (w, rest) -> Right (w, rest)
 
 getU16 :: Get Word16
@@ -46,7 +46,7 @@ getBytes n =
   Get $ \bs ->
     let (prefix, rest) = BS.splitAt n bs
      in if BS.length prefix < n
-          then Left $ DecodeError "getBytes: not enough input"
+          then Left $ DecodeError ()
           else Right (prefix, rest)
 
 instance Functor Get where
@@ -76,17 +76,6 @@ runPut p =
 
 newtype Put a = Put {runPutInternal :: (a, Builder)}
 
-instance Functor Put where
-  fmap f (Put (a, b)) = Put (f a, b)
-
-instance Applicative Put where
-  pure x = Put (x, mempty)
-  (Put (f, b1)) <*> (Put (a, b2)) = Put (f a, b1 <> b2)
-
-instance Monad Put where
-  return = pure
-  (Put (a, b1)) >>= f = let (Put (a', b2)) = f a in Put (a', b1 <> b2)
-
 putU8 :: Word8 -> Put ()
 putU8 w =
   Put ((), Builder.word8 w)
@@ -98,3 +87,14 @@ putU16 w = do
 
 putBytes :: ByteString -> Put ()
 putBytes bs = Put ((), Builder.byteString bs)
+
+instance Functor Put where
+  fmap f (Put (a, b)) = Put (f a, b)
+
+instance Applicative Put where
+  pure x = Put (x, mempty)
+  (Put (f, b1)) <*> (Put (a, b2)) = Put (f a, b1 <> b2)
+
+instance Monad Put where
+  return = pure
+  (Put (a, b1)) >>= f = let (Put (a', b2)) = f a in Put (a', b1 <> b2)
