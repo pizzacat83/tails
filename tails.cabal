@@ -49,9 +49,11 @@ library
   import: warnings
   -- Modules exported by the library.
   exposed-modules:
+    Tails.App.Http
     Tails.App.Server
     Tails.Bytes
     Tails.TLS.Codec
+    Tails.TLS.Crypto.KeySchedule
     Tails.TLS.Handshake.Codec
     Tails.TLS.Handshake.Types
     Tails.TLS.Record.Codec
@@ -68,6 +70,8 @@ library
   build-depends:
     base >=4.18 && <5,
     bytestring,
+    crypton,
+    memory,
     network,
 
   -- Directories containing source files.
