@@ -9,7 +9,7 @@ import Numeric (showHex)
 import Tails.TCP (acceptLoop, recvSome, sendAll, withServer)
 import Tails.TLS.Codec (DecodeError (..))
 import Tails.TLS.Handshake.Codec (decodeClientHello, decodeHandshake, encodeHandshake, encodeKeyShareServerHelloExtension, encodeServerHello, encodeServerSupportedVersionExtension)
-import Tails.TLS.Handshake.Types (Certificate (..), CertificateEntry (CertificateEntry, certificateData, certificateExtensions), CertificateVerify (CertificateVerify, algorithm), CipherSuite (..), ClientHello (ClientHello, legacySessionId), EncryptedExtensions (EncryptedExtensions), Extension (Extension), ExtensionType (KeyShareType, SupportedVersionsType), Handshake (..), HandshakeType (ClientHelloType, ServerHelloType), KeyShareEntry (..), KeyShareServerHello (..), NamedGroup (..), ProtocolVersion (..), Random (Random), ServerHello (..), ServerSupportedVersion (..), SignatureScheme (RSS_PSS_RSAE_SHA256))
+import Tails.TLS.Handshake.Types (Certificate (..), CertificateEntry (CertificateEntry, certificateData, certificateExtensions), CertificateVerify (..), CipherSuite (..), ClientHello (ClientHello, legacySessionId), EncryptedExtensions (EncryptedExtensions), Extension (Extension), ExtensionType (KeyShareType, SupportedVersionsType), Finished (..), Handshake (..), HandshakeType (ClientHelloType, ServerHelloType), KeyShareEntry (..), KeyShareServerHello (..), NamedGroup (..), ProtocolVersion (..), Random (Random), ServerHello (..), ServerSupportedVersion (..), SignatureScheme (RSS_PSS_RSAE_SHA256))
 import Tails.TLS.Record.Codec (decodeTLSPlainText, encodeTLSPlainText)
 import Tails.TLS.Record.Types (ContentType (Handshake), TLSPlainText (..))
 
@@ -116,13 +116,29 @@ handleConn = do
   let encryptedExtensions = EncryptedExtensions []
   sendEncryptedExtensions encryptedExtensions
 
-  let certificate = undefined
+  let certificate =
+        Certificate
+          { certificateRequestContext = BS.empty,
+            certificateList =
+              [ CertificateEntry -- TODO: how to load real certificate?
+                  { certificateData = BS.empty,
+                    certificateExtensions = []
+                  }
+              ]
+          }
   sendCertificate certificate
 
-  let certificateVerify = undefined
+  sig <- undefined
+  let certificateVerify =
+        CertificateVerify
+          { algorithm = RSS_PSS_RSAE_SHA256,
+            signature = sig
+          }
   sendCertificateVerify certificateVerify
 
-  sendFinished
+  -- TODO: need to be computed from previous data
+  let serverFinished = Finished {verifyData = BS.empty}
+  sendFinished serverFinished
 
   clientFinished <- recvClientFinished
 
