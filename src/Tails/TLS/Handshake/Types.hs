@@ -3,6 +3,7 @@
 module Tails.TLS.Handshake.Types where
 
 import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
 
 data Handshake = Handshake
   { msgType :: HandshakeType,
@@ -68,7 +69,7 @@ data ServerHello = ServerHello
   }
 
 -- https://datatracker.ietf.org/doc/html/rfc8446#section-4.2.8
-data KeyShareServerHello = KeyShareServerHello
+newtype KeyShareServerHello = KeyShareServerHello
   { serverShare :: KeyShareEntry
   }
 
@@ -80,3 +81,43 @@ data KeyShareEntry = KeyShareEntry
 data NamedGroup = X25519 deriving (Show, Eq)
 
 -- There are many more named groups, but for now we only define one
+
+newtype EncryptedExtensions = EncryptedExtensions [Extension] deriving (Show, Eq)
+
+data Certificate = Certificate
+  { certificateRequestContext :: ByteString,
+    certificateList :: [CertificateEntry]
+  }
+  deriving (Show, Eq)
+
+data CertificateEntry = CertificateEntry
+  { certificateData :: ByteString, -- This field is interpreted differently based on the negotiated ceritificate type. How can we represent that?
+    certificateExtensions :: [Extension]
+  }
+  deriving (Show, Eq)
+
+data CertificateVerify = CertificateVerify
+  { algorithm :: SignatureScheme,
+    signature :: ByteString
+  }
+  deriving (Show, Eq)
+
+data SignatureScheme
+  = RSS_PSS_RSAE_SHA256
+  deriving (Show, Eq)
+
+newtype Finished = Finished
+  { verifyData :: ByteString
+  }
+  deriving (Show, Eq)
+
+-- TODO: Shouldn't opaque types be newtype?
+
+-- https://datatracker.ietf.org/doc/html/rfc8446#section-4.4
+data ServerHandshakeContext = ServerHandshakeContext
+  { -- ClientHello ... later of EncryptedExtensions/CertificateRequest
+    clientHelloPayload :: ByteString,
+    serverHelloPayload :: ByteString,
+    encryptedExtensionsPayload :: ByteString
+  }
+  deriving (Show, Eq)
