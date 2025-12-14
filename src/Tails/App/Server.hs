@@ -1,15 +1,25 @@
 module Tails.App.Server (runServer, handleConnEcho) where
 
 import Control.Monad (unless)
+import qualified Crypto.Cipher.AES
+import qualified Crypto.Cipher.Types
+import Crypto.ConstructHash.MiyaguchiPreneel (compute)
+import Crypto.ECC (SharedSecret (SharedSecret))
+import qualified Crypto.ECC
+import Crypto.Error (CryptoFailable (..))
+import qualified Crypto.PubKey.ECIES
+import qualified Data.ByteArray as BA
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as B8
+import Data.Data (Proxy (..))
 import Network.Socket (Socket)
 import Numeric (showHex)
 import Tails.TCP (acceptLoop, recvSome, sendAll, withServer)
 import Tails.TLS.Codec (DecodeError (..))
+import Tails.TLS.Crypto.KeySchedule (deriveSecret, deriveSecrets, hkdfExpandLabel)
 import Tails.TLS.Handshake.Codec (decodeClientHello, decodeHandshake, encodeHandshake, encodeKeyShareServerHelloExtension, encodeServerHello, encodeServerSupportedVersionExtension)
-import Tails.TLS.Handshake.Types (Certificate (..), CertificateEntry (CertificateEntry, certificateData, certificateExtensions), CertificateVerify (..), CipherSuite (..), ClientHello (ClientHello, legacySessionId), EncryptedExtensions (EncryptedExtensions), Extension (Extension), ExtensionType (KeyShareType, SupportedVersionsType), Finished (..), Handshake (..), HandshakeType (ClientHelloType, ServerHelloType), KeyShareEntry (..), KeyShareServerHello (..), NamedGroup (..), ProtocolVersion (..), Random (Random), ServerHello (..), ServerSupportedVersion (..), SignatureScheme (RSS_PSS_RSAE_SHA256))
+import Tails.TLS.Handshake.Types (Certificate (..), CertificateEntry (CertificateEntry, certificateData, certificateExtensions), CertificateVerify (..), CipherSuite (..), ClientHello (ClientHello, legacySessionId), EncryptedExtensions (EncryptedExtensions), Extension (Extension), ExtensionType (KeyShareType, SupportedVersionsType), Finished (..), Handshake (..), HandshakeType (ClientHelloType, ServerHelloType), KeyShareEntry (..), KeyShareServerHello (..), NamedGroup (..), ProtocolVersion (..), Random (Random), ServerHandshakeContext (..), ServerHello (..), ServerSupportedVersion (..), SignatureScheme (RSS_PSS_RSAE_SHA256))
 import Tails.TLS.Record.Codec (decodeTLSPlainText, encodeTLSPlainText)
 import Tails.TLS.Record.Types (ContentType (Handshake), TLSPlainText (..))
 
@@ -105,12 +115,22 @@ handleConnEcho sock = do
 
 handleConn = do
   clientHello <- recvClientHello
+  -- Note: we need the raw bytestring for transcript hash!
 
-  let serverHello = undefined
+  let exchangedClientX25519PubKey = undefined -- can be extracted from clientHello!
+  let (exchangedServerX25519PubKey, exchangedServerX25519PrivKey) = undefined
+
+  let sharedSecret = computeSharedSecretX25519 exchangedClientX25519PubKey exchangedServerX25519PrivKey
+
+  let serverHello = makeServerHello
   sendServerHello serverHello
 
   -- Hereafter, messages are encrypted!
   -- How should we deal with encryption keys?
+  let keyScheduleResult = proceedKeySchedule state sharedSecret -- sharedSecret が手に入ったので追加のシークレットが得られるぞの気持ち
+  let serverHandshakeTrafficSecret = undefined -- TODO: derive from key schedule
+  let serverWriteKey = hkdfExpandLabel serverHandshakeTrafficSecret (B8.pack "key") BS.empty aes256KeySize
+  let serverWriteIV = hkdfExpandLabel serverHandshakeTrafficSecret (B8.pack "iv") BS.empty aes256IVSize
 
   -- In our toy implementation, we just send empty extensions
   let encryptedExtensions = EncryptedExtensions []
@@ -128,12 +148,7 @@ handleConn = do
           }
   sendCertificate certificate
 
-  sig <- undefined
-  let certificateVerify =
-        CertificateVerify
-          { algorithm = RSS_PSS_RSAE_SHA256,
-            signature = sig
-          }
+  certificateVerify <- makeCertificateVerify
   sendCertificateVerify certificateVerify
 
   -- TODO: need to be computed from previous data
@@ -143,6 +158,42 @@ handleConn = do
   clientFinished <- recvClientFinished
 
   runApp
+  where
+    makeCertificateVerify = do
+      let signedContent = transcriptHash [handshakeContext, certificate]
+
+      let signedPayload =
+            BS.concat
+              [ BS.replicate 64 0x20,
+                contextString,
+                BS.singleton 0x00,
+                signedContent
+              ]
+            where
+              contextString = B8.pack "TLS 1.3, server CertificateVerify"
+
+      sig <- undefined
+      pure $
+        CertificateVerify
+          { algorithm = RSS_PSS_RSAE_SHA256,
+            signature = sig
+          }
+
+-- Where should this be defined?
+packServerHandshakeContext :: ServerHandshakeContext -> ByteString
+packServerHandshakeContext (ServerHandshakeContext ch sh ee) =
+  BS.concat [ch, sh, ee]
+
+-- Need to move this to Crypto/
+type X25519PublicKey = Crypto.ECC.Point Crypto.ECC.Curve_X25519
+
+type X25519PrivateKey = Crypto.ECC.Scalar Crypto.ECC.Curve_X25519
+
+computeSharedSecretX25519 :: X25519PublicKey -> X25519PrivateKey -> Either String ByteString
+computeSharedSecretX25519 pub pri =
+  case Crypto.PubKey.ECIES.deriveDecrypt (Proxy :: Proxy Crypto.ECC.Curve_X25519) pub pri of
+    CryptoPassed (SharedSecret s) -> Right $ BA.convert s
+    CryptoFailed err -> Left $ show err
 
 -- a veeeeeeery simple HTTP app.
 -- TODO: Tails.TLS should provide send/recv interface to the app layer. Too restrictive now!
@@ -163,3 +214,8 @@ appHandle req =
           ++ "Content-Type: text/plain\r\n"
           ++ "\r\n"
           ++ "Not Found"
+
+-- TODO: move this to the Crypto module?
+aes256KeySize = 32
+
+aes256IVSize = 12
