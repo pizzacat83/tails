@@ -1,6 +1,7 @@
 module Tails.App.Server (runServer, handleConnEcho) where
 
 import Control.Monad (unless)
+import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as B8
 import Network.Socket (Socket)
@@ -8,7 +9,7 @@ import Numeric (showHex)
 import Tails.TCP (acceptLoop, recvSome, sendAll, withServer)
 import Tails.TLS.Codec (DecodeError (..))
 import Tails.TLS.Handshake.Codec (decodeClientHello, decodeHandshake, encodeHandshake, encodeKeyShareServerHelloExtension, encodeServerHello, encodeServerSupportedVersionExtension)
-import Tails.TLS.Handshake.Types (CipherSuite (..), ClientHello (ClientHello, legacySessionId), Extension (Extension), ExtensionType (KeyShareType, SupportedVersionsType), Handshake (..), HandshakeType (ClientHelloType, ServerHelloType), KeyShareEntry (..), KeyShareServerHello (..), NamedGroup (..), ProtocolVersion (..), Random (Random), ServerHello (..), ServerSupportedVersion (..))
+import Tails.TLS.Handshake.Types (Certificate (..), CertificateEntry (CertificateEntry, certificateData, certificateExtensions), CertificateVerify (CertificateVerify, algorithm), CipherSuite (..), ClientHello (ClientHello, legacySessionId), EncryptedExtensions (EncryptedExtensions), Extension (Extension), ExtensionType (KeyShareType, SupportedVersionsType), Handshake (..), HandshakeType (ClientHelloType, ServerHelloType), KeyShareEntry (..), KeyShareServerHello (..), NamedGroup (..), ProtocolVersion (..), Random (Random), ServerHello (..), ServerSupportedVersion (..), SignatureScheme (RSS_PSS_RSAE_SHA256))
 import Tails.TLS.Record.Codec (decodeTLSPlainText, encodeTLSPlainText)
 import Tails.TLS.Record.Types (ContentType (Handshake), TLSPlainText (..))
 
@@ -88,9 +89,61 @@ handleConnEcho sock = do
                         }
                 }
 
+          -- TODO: send EncryptedExtensions
+          -- TODO: send Certificate
+          -- TODO: send CertificateVerify
+          -- TODO: send Finished
+          -- TODO: receive ClientFinished
+          -- TODO: receive ApplicationData
+
           -- it would be nice if we can print the sent and received data without WireShark, but how can we design that, considering that a meaningful data (e.g. Handshake) can split across multiple chunks of the envelope?
 
           loop' rest
         Left NeedMoreData -> loop buf
         Left (Malformed err) -> do
           ioError $ userError $ "malformed TLS record: " ++ show err
+
+handleConn = do
+  clientHello <- recvClientHello
+
+  let serverHello = undefined
+  sendServerHello serverHello
+
+  -- Hereafter, messages are encrypted!
+  -- How should we deal with encryption keys?
+
+  -- In our toy implementation, we just send empty extensions
+  let encryptedExtensions = EncryptedExtensions []
+  sendEncryptedExtensions encryptedExtensions
+
+  let certificate = undefined
+  sendCertificate certificate
+
+  let certificateVerify = undefined
+  sendCertificateVerify certificateVerify
+
+  sendFinished
+
+  clientFinished <- recvClientFinished
+
+  runApp
+
+-- a veeeeeeery simple HTTP app.
+-- TODO: Tails.TLS should provide send/recv interface to the app layer. Too restrictive now!
+appHandle :: ByteString -> ByteString
+appHandle req =
+  if "GET / " `BS.isPrefixOf` req
+    then
+      B8.pack $
+        "HTTP/1.1 200 OK\r\n"
+          ++ "Content-Length: 13\r\n"
+          ++ "Content-Type: text/plain\r\n"
+          ++ "\r\n"
+          ++ "Hello over TLS!"
+    else
+      B8.pack $
+        "HTTP/1.1 404 Not Found\r\n"
+          ++ "Content-Length: 9\r\n"
+          ++ "Content-Type: text/plain\r\n"
+          ++ "\r\n"
+          ++ "Not Found"
