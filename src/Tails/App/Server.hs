@@ -13,15 +13,19 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as B8
 import Data.Data (Proxy (..))
+import Data.Word (Word64)
+import GHC.IO.Encoding (BufferCodec (encode))
 import Network.Socket (Socket)
 import Numeric (showHex)
+import System.Posix.Internals (o_BINARY)
+import Tails.Bytes (putBytes, putU64, runPut)
 import Tails.TCP (acceptLoop, recvSome, sendAll, withServer)
 import Tails.TLS.Codec (DecodeError (..))
 import Tails.TLS.Crypto.KeySchedule (deriveSecret, deriveSecrets, hkdfExpandLabel)
 import Tails.TLS.Handshake.Codec (decodeClientHello, decodeHandshake, encodeHandshake, encodeKeyShareServerHelloExtension, encodeServerHello, encodeServerSupportedVersionExtension)
 import Tails.TLS.Handshake.Types (Certificate (..), CertificateEntry (CertificateEntry, certificateData, certificateExtensions), CertificateVerify (..), CipherSuite (..), ClientHello (ClientHello, legacySessionId), EncryptedExtensions (EncryptedExtensions), Extension (Extension), ExtensionType (KeyShareType, SupportedVersionsType), Finished (..), Handshake (..), HandshakeType (ClientHelloType, ServerHelloType), KeyShareEntry (..), KeyShareServerHello (..), NamedGroup (..), ProtocolVersion (..), Random (Random), ServerHandshakeContext (..), ServerHello (..), ServerSupportedVersion (..), SignatureScheme (RSS_PSS_RSAE_SHA256))
 import Tails.TLS.Record.Codec (decodeTLSPlainText, encodeTLSPlainText)
-import Tails.TLS.Record.Types (ContentType (Handshake), TLSPlainText (..))
+import Tails.TLS.Record.Types (ContentType (Handshake), TLSCiphertext (..), TLSInnerPlaintext (..), TLSPlainText (..))
 
 runServer :: IO ()
 runServer =
@@ -159,6 +163,30 @@ handleConn = do
 
   runApp
   where
+    sendEncryptedExtensions encryptedExtensions = do
+      let writeKey = undefined
+      let iv = undefined
+      let protectedRecord =
+            protectRecord writeKey iv $
+              TLSInnerPlaintext
+                { content =
+                    encodeHandshake $
+                      Tails.TLS.Handshake.Types.Handshake
+                        { msgType = EncryptedExtensionsType,
+                          msg = encodeEncryptedExtensions encryptedExtensions
+                        },
+                  innerContentType = Tails.TLS.Record.Types.Handshake
+                  -- padding?
+                }
+      sendAll sock $ encodeTLSCiphertext protectedRecord
+
+    protectRecord :: ByteString -> ByteString -> TLSInnerPlaintext -> TLSCiphertext
+    protectRecord writeKey iv plaintext = do
+      -- TODO: how to manage sequence number? Since it increments per record (including non-encrypted ones), we should track the state outside the protection mechanism
+      let nonce = calculatePerRecordNonce iv sequenceNumber
+      -- TODO: need data for additional authenticated data
+      pure $ TLSCiphertext $ aeadEncrypt writeKey nonce additionalData plaintext
+
     makeCertificateVerify = do
       let signedContent = transcriptHash [handshakeContext, certificate]
 
@@ -195,11 +223,34 @@ computeSharedSecretX25519 pub pri =
     CryptoPassed (SharedSecret s) -> Right $ BA.convert s
     CryptoFailed err -> Left $ show err
 
+aeadEncrypt key nonce plaintext associatedData = do
+  aead <- Crypto.Cipher.Types.aeadInit Crypto.Cipher.Types.AEAD_GCM key nonce
+
+  -- An authentication tag with a length of 16 octets (128 bits) is used.
+  -- http://datatracker.ietf.org/doc/html/rfc5116#section-5.1
+  let tagLength = 16
+  let (tag, ciphertext) = Crypto.Cipher.Types.aeadSimpleEncrypt aead associatedData plaintext tagLength
+
+  -- The AEAD_AES_{128,256}_GCM ciphertext is formed by appending the authentication tag provided as an output to the GCM encryption operation to the ciphertext that is output by that operation.
+  return (ciphertext <> BA.convert tag :: ByteString)
+
+calculatePerRecordNonce :: ByteString -> Word64 -> ByteString
+calculatePerRecordNonce iv seqNum =
+  --  1. The 64-bit record sequence number is encoded in network byte order and padded to the left with zeros to iv_length.
+  let seqNumBytes = runPut $ do
+        putU64 seqNum
+        putBytes (BS.replicate (ivlength - 8) 0x00)
+   in --  2. The padded sequence number is XORed with either the static client_write_iv or server_write_iv (depending on the role).
+      BS.pack $
+        BS.zipWith xor iv seqNumBytes
+  where
+    ivlength = aes256IVSize
+
 -- a veeeeeeery simple HTTP app.
 -- TODO: Tails.TLS should provide send/recv interface to the app layer. Too restrictive now!
 appHandle :: ByteString -> ByteString
 appHandle req =
-  if "GET / " `BS.isPrefixOf` req
+  if B8.pack "GET / " `BS.isPrefixOf` req
     then
       B8.pack $
         "HTTP/1.1 200 OK\r\n"
