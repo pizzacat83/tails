@@ -1,3 +1,6 @@
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE KindSignatures #-}
+
 module Tails.TLS.Crypto.KeySchedule where
 
 import Crypto.Hash (Digest, HashAlgorithm (hashDigestSize))
@@ -11,48 +14,102 @@ import qualified Data.ByteString.Char8 as B8
 import Data.List (unfoldr)
 import Tails.Bytes (putOpaqueVector, putU16, runPut)
 
-deriveSecrets psk ecdhe = do
-  let earlySecret = hkdfExtract psk BS.empty
+newtype EarlySecret = EarlySecret ByteString deriving (Show, Eq)
 
-  let derivedSecret = deriveSecret earlySecret (B8.pack "derived") []
+newtype HandshakeSecret = HandshakeSecret ByteString deriving (Show, Eq)
 
-  -- we need ecdhe here
+newtype MasterSecret = MasterSecret ByteString deriving (Show, Eq)
 
-  let handshakeSecret = hkdfExtract ecdhe derivedSecret
+deriveEarlySecret :: ByteString -> EarlySecret
+deriveEarlySecret psk = EarlySecret $ hkdfExtract psk zeroVector
 
-  -- oh! we need client and server hello messages for transcript hash
-  -- TODO: Need a state machine or a cool monad?
-  let clientHello = undefined
-  let serverHello = undefined
-  let clientHandshakeTrafficSecret = deriveSecret handshakeSecret (B8.pack "c hs traffic") [clientHello, serverHello]
+deriveHandshakeSecret :: EarlySecret -> ByteString -> HandshakeSecret
+deriveHandshakeSecret (EarlySecret es) ecdhe =
+  let d = deriveSecret es (B8.pack "derived") thEmpty
+   in HandshakeSecret $ hkdfExtract ecdhe d
 
-  let serverHandshakeTrafficSecret = deriveSecret handshakeSecret (B8.pack "s hs traffic") [clientHello, serverHello]
+deriveClientHandshakeTrafficSecret :: HandshakeSecret -> THContext 'TS_SH -> ByteString
+deriveClientHandshakeTrafficSecret (HandshakeSecret hs) ctx =
+  deriveSecret hs (B8.pack "c hs traffic") ctx
 
-  let derivedSecret2 = deriveSecret handshakeSecret (B8.pack "derived") []
+deriveServerHandshakeTrafficSecret :: HandshakeSecret -> THContext 'TS_SH -> ByteString
+deriveServerHandshakeTrafficSecret (HandshakeSecret hs) ctx =
+  deriveSecret hs (B8.pack "s hs traffic") ctx
 
-  let masterSecret = hkdfExtract BS.empty derivedSecret2
+deriveMasterSecret :: HandshakeSecret -> MasterSecret
+deriveMasterSecret (HandshakeSecret hs) =
+  let derivedSecret = deriveSecret hs (B8.pack "derived") thEmpty
+   in MasterSecret $ hkdfExtract zeroVector derivedSecret
 
-  let encryptedExtensions = undefined
-  let certificate = undefined
-  let certificateVerify = undefined
-  let serverFinished = undefined
+deriveClientApplicationTrafficSecret :: MasterSecret -> THContext 'TS_SF -> ByteString
+deriveClientApplicationTrafficSecret (MasterSecret ms) ctx =
+  deriveSecret ms (B8.pack "c ap traffic") ctx
 
-  -- We need more messages here!!
+deriveServerApplicationTrafficSecret :: MasterSecret -> THContext 'TS_SF -> ByteString
+deriveServerApplicationTrafficSecret (MasterSecret ms) ctx =
+  deriveSecret ms (B8.pack "s ap traffic") ctx
 
-  let clientHandshakeTrafficSecret = deriveSecret masterSecret (B8.pack "c ap traffic") [clientHello, serverHello, encryptedExtensions, certificate, certificateVerify, serverFinished]
+-- "0" indicates a string of Hash.length bytes set to zero.
+zeroVector :: ByteString
+zeroVector = BS.replicate (hashDigestSize Crypto.Hash.Algorithms.SHA384) 0
 
-  pure ()
+-- TODO: Move to appropriate modules?
+
+data TSPhase
+  = TS_EMPTY
+  | TS_SH
+  | TS_CR
+  | TS_SF
+  | TS_CF
+  deriving (Show, Eq)
+
+newtype THContext (p :: TSPhase) = THContext (Crypto.Hash.Context Crypto.Hash.Algorithms.SHA384)
+
+transcriptHash :: THContext p -> ByteString
+transcriptHash (THContext ctx) = BA.convert $ Crypto.Hash.hashFinalize ctx
+
+thEmpty :: THContext 'TS_EMPTY
+thEmpty = THContext (Crypto.Hash.hashInit :: Crypto.Hash.Context Crypto.Hash.Algorithms.SHA384)
+
+makeTHUntilServerHello :: ClientHelloRaw -> ServerHelloRaw -> THContext 'TS_SH
+makeTHUntilServerHello (ClientHelloRaw ch) (ServerHelloRaw sh) =
+  THContext $ Crypto.Hash.hashUpdate (Crypto.Hash.hashInit :: Crypto.Hash.Context Crypto.Hash.Algorithms.SHA384) (ch <> sh)
+
+makeTHUntilCertificateRequest :: THContext 'TS_SH -> EncryptedExtensionsRaw -> THContext 'TS_CR
+makeTHUntilCertificateRequest (THContext ctx) (EncryptedExtensionsRaw ee) =
+  THContext $ Crypto.Hash.hashUpdate ctx ee
+
+makeTHUntilServerFinished :: THContext 'TS_CR -> ServerCertificateRaw -> ServerCertificateVerifyRaw -> ServerFinishedRaw -> THContext 'TS_SF
+makeTHUntilServerFinished (THContext ctx) (ServerCertificateRaw cert) (CertificateVerifyRaw cv) (FinishedRaw fin) =
+  THContext $ Crypto.Hash.hashUpdate (Crypto.Hash.hashUpdate (Crypto.Hash.hashUpdate ctx cert) cv) fin
+
+-- The following types are the encoded form of the Handshake type.
+-- TODO: Want to ensure this property via types?
+
+newtype ClientHelloRaw = ClientHelloRaw ByteString deriving (Show, Eq)
+
+newtype ServerHelloRaw = ServerHelloRaw ByteString deriving (Show, Eq)
+
+newtype EncryptedExtensionsRaw = EncryptedExtensionsRaw ByteString deriving (Show, Eq)
+
+newtype ServerCertificateRaw = ServerCertificateRaw ByteString deriving (Show, Eq)
+
+newtype ServerCertificateVerifyRaw = CertificateVerifyRaw ByteString deriving (Show, Eq)
+
+newtype ServerFinishedRaw = FinishedRaw ByteString deriving (Show, Eq)
 
 -- Crypto DSL
 -- TODO: Move these to a proper Crypto module
 
 -- TODO: Very not confident about the correctness. Want tests!!
 
-deriveSecret secret label messages =
-  hkdfExpandLabel secret label (transcriptHash messages) (hashDigestSize Crypto.Hash.Algorithms.SHA384)
+-- Unlike the RFC definition, the third argument is the hash context of the messages, not the messages themselves.
+deriveSecret :: ByteString -> ByteString -> THContext p -> ByteString
+deriveSecret secret label msgContext =
+  hkdfExpandLabel secret label (transcriptHash msgContext) (hashDigestSize Crypto.Hash.Algorithms.SHA384)
 
-transcriptHash messages =
-  hash (BS.concat messages)
+-- transcriptHash messages =
+--   hash (BS.concat messages)
 
 hkdfExpandLabel secret label context length =
   hkdfExpand secret hkdfLabel length
